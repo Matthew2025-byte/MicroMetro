@@ -45,7 +45,7 @@ struct Vector : VectorData<N, T> {
 	}
 	constexpr const std::size_t size() const noexcept { return N; }
 
-	constexpr Vector operator+(const Vector& other) noexcept {
+	constexpr Vector operator+(const Vector& other) const noexcept {
 		static_assert(N == other.data.size());
 		Vector<T, N> result{};
 		for (std::size_t i = 0; i < N; ++i) {
@@ -53,7 +53,7 @@ struct Vector : VectorData<N, T> {
 		}
 		return result;
 	}
-	constexpr Vector operator-(const Vector& other) noexcept {
+	constexpr Vector operator-(const Vector& other) const noexcept {
 		static_assert(N == other.size());
 		Vector<N, T> result(*this);
 		for (std::size_t i = 0; i < N; ++i) {

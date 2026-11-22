@@ -2,19 +2,50 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include <array>
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include "utils/Vector.hpp"
 
+class Station {
+   public:
+	enum Type { Square, Circle, Triangle };
+
+	const Vector2f& getPos() const { return pos; }
+	Type getType() const { return type; }
+
+	Station() = default;
+	Station(Vector2f pos) : pos(pos), type(Circle) {}
+
+   private:
+	Vector2f pos;
+	Type type;
+};
+struct RailSegment {
+	Station* start;
+	Station* end;
+	Vector2f midpoint;
+
+	RailSegment(Station* start, Station* end, Vector2f mid) : start(start), end(end), midpoint(mid) {}
+};
 struct AppState {
 	SDL_Window* window;
 	SDL_Renderer* renderer;
 
 	SDL_Texture* circle;
 	SDL_Texture* rect;
+	SDL_Texture* triangle;
 
-	std::unique_ptr<Vector2f> initial;
-	std::unique_ptr<Vector2f> current;
+	std::optional<Vector2f> intercept;
+	std::optional<Vector2f> current;
+
+	bool mouseRight = false;
+	Station* startStation;
+
+	std::vector<std::unique_ptr<Station>> stations;
+	std::vector<std::unique_ptr<RailSegment>> rails;
 
 	~AppState() {
 		if (circle) SDL_DestroyTexture(circle);
@@ -45,9 +76,12 @@ SDL_Texture* createRect(SDL_Renderer* renderer) {
 	SDL_DestroySurface(surface);
 	return tex;
 }
-void drawPoint(SDL_Renderer* renderer, SDL_Texture* texture, Vector2f point, float radius) {
-	auto pointA = SDL_FRect{ point.x - radius, point.y - radius, 100, 100 };
-	SDL_RenderTexture(renderer, texture, NULL, &pointA);
+SDL_Texture* createTriangle(SDL_Renderer* renderer) { return nullptr; }
+void drawShape(SDL_Renderer* renderer, SDL_Texture* texture, Vector2f center, float width, SDL_Color color) {
+	SDL_SetTextureColorMod(texture, color.r, color.g, color.b);
+	SDL_SetTextureAlphaMod(texture, color.a);
+	auto rect = SDL_FRect{ center.x - (width / 2), center.y - (width / 2), width, width };
+	SDL_RenderTexture(renderer, texture, NULL, &rect);
 }
 void drawLine(SDL_Renderer* renderer, SDL_Texture* texture, Vector2f a, Vector2f b, float width) {
 	auto diff = b - a;
@@ -59,6 +93,15 @@ void drawLine(SDL_Renderer* renderer, SDL_Texture* texture, Vector2f a, Vector2f
 	SDL_FPoint rotationPoint = { 0, width / 2 };
 
 	SDL_RenderTextureRotated(renderer, texture, NULL, &line, angle, &rotationPoint, SDL_FlipMode::SDL_FLIP_NONE);
+}
+void drawTrace(SDL_Renderer* renderer, SDL_Texture* circle, SDL_Texture* rail, std::array<Vector2f, 3> points,
+			   SDL_Color color) {
+	drawShape(renderer, circle, points[0], 20, color);
+	drawShape(renderer, circle, points[1], 20, color);
+	drawShape(renderer, circle, points[2], 20, color);
+
+	drawLine(renderer, rail, points[0], points[1], 20);
+	drawLine(renderer, rail, points[1], points[2], 20);
 }
 Vector2f getIntercept(Vector2f a, Vector2f b) {
 	Vector2f diff = b - a;
@@ -86,20 +129,47 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv) {
 
 SDL_AppResult SDL_AppIterate(void* appstate) {
 	AppState& app = *static_cast<AppState*>(appstate);
+	SDL_GetMouseState(&app.current->x, &app.current->y);
 
 	SDL_RenderClear(app.renderer);
 
-	if (app.initial.get()) {
-		SDL_GetMouseState(&app.current->x, &app.current->y);
+	if (app.current) {
+		*app.intercept = getIntercept(app.startStation->getPos(), *app.current);
+		drawTrace(app.renderer, app.circle, app.rect, { app.startStation->getPos(), *app.intercept, *app.current },
+				  SDL_Color{ 255, 255, 255, 255 });
+	}
+	for (const auto& rail : app.rails) {
+		drawTrace(app.renderer, app.circle, app.rect, { rail->start->getPos(), rail->midpoint, rail->end->getPos() },
+				  SDL_Color{ 255, 255, 255, 255 });
+	}
+	for (auto& station : app.stations) {
+		SDL_Texture* shape;
+		switch (station->getType()) {
+			case Station::Circle:
+				shape = app.circle;
+				break;
+			case Station::Square:
+				shape = app.rect;
+				break;
+			case Station::Triangle:
+				shape = app.triangle;
+				break;
+		}
+		float size = 20;
+		auto dist = station->getPos() - *app.current;
+		if (dist.magnitude() < size) {
+			if (!app.startStation) {
+				app.startStation = station.get();
+			}
+			if (station.get() != app.startStation) {
+				app.rails.emplace_back(
+					std::make_unique<RailSegment>(app.startStation, station.get(), app.intercept.value()));
+				app.startStation = station.get();
+			}
+			size = 30;
+		} else if (station.get() == app.startStation && !app.current) app.startStation = nullptr;
 
-		auto intercept = getIntercept(*app.initial, *app.current);
-
-		drawPoint(app.renderer, app.circle, *app.initial, 50);
-		drawPoint(app.renderer, app.circle, *app.current, 50);
-		drawPoint(app.renderer, app.circle, intercept, 50);
-
-		drawLine(app.renderer, app.rect, *app.initial, intercept, 100);
-		drawLine(app.renderer, app.rect, intercept, *app.current, 100);
+		drawShape(app.renderer, shape, station->getPos(), size, SDL_Color{ 255, 255, 255, 255 });
 	}
 
 	SDL_RenderPresent(app.renderer);
@@ -110,11 +180,19 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event) {
 	AppState& app = *static_cast<AppState*>(appstate);
 
 	if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-		app.initial = std::make_unique<Vector2f>(event->motion.x, event->motion.y);
-		app.current = std::make_unique<Vector2f>(event->motion.x, event->motion.y);
+		if (event->button.button == SDL_BUTTON_LEFT && app.startStation) {
+			app.current = app.startStation->getPos();
+			app.intercept.emplace(0, 0);
+		} else if (event->button.button == SDL_BUTTON_RIGHT && !app.mouseRight) {
+			app.mouseRight = true;
+			app.stations.emplace_back(std::make_unique<Station>(Vector2f{ event->button.x, event->button.y }));
+		}
 	} else if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
-		app.initial.reset();
-		app.current.reset();
+		if (event->button.button == SDL_BUTTON_LEFT) {
+			app.intercept.reset();
+			app.current.reset();
+			app.startStation = nullptr;
+		} else if (event->button.button == SDL_BUTTON_RIGHT) app.mouseRight = false;
 	}
 
 	else if (event->type == SDL_EVENT_QUIT)
