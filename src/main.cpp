@@ -18,7 +18,6 @@ struct AppState {
 	~AppState() {
 		if (window) SDL_DestroyWindow(window);
 	}
-	AppState() = default;
 };
 
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char** argv) {

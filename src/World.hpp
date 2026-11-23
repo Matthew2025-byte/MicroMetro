@@ -63,7 +63,13 @@ struct World {
 	std::optional<DragState> activeDrag;
 	bool rightMouseDown = false;
 
-	World() { lines.push_back(RailLine{ {}, { 255, 255, 255, 255 } }); }
+	int selectedRail = 0;
+	std::array<SDL_Color, 4> railColors;
+
+	World() {
+		lines.push_back(RailLine{ {}, { 255, 255, 255, 255 } });
+		railColors.fill({ 255, 255, 255, 255 });
+	}
 
 	void update(Vector2f mousePos) {
 		hoverStation = nullptr;
@@ -98,6 +104,13 @@ struct World {
 			if (event->button.button == SDL_BUTTON_LEFT) {
 				onLeftMouseUp();
 			} else if (event->button.button == SDL_BUTTON_RIGHT) rightMouseDown = false;
+		}
+
+		if (event->type == SDL_EVENT_KEY_DOWN) {
+			if (event->key.scancode == SDL_SCANCODE_1) selectedRail = 0;
+			if (event->key.scancode == SDL_SCANCODE_2) selectedRail = 1;
+			if (event->key.scancode == SDL_SCANCODE_3) selectedRail = 2;
+			if (event->key.scancode == SDL_SCANCODE_4) selectedRail = 3;
 		}
 	}
 
