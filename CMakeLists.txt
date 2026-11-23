@@ -7,6 +7,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(SDL3 CONFIG REQUIRED)
 
-add_executable(MicroMetro src/main.cpp)
+add_executable(MicroMetro src/main.cpp src/Renderer.cpp)
 
 target_link_libraries(MicroMetro SDL3::SDL3)
