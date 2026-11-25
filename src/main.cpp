@@ -36,7 +36,7 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 
 	Vector2f mouse{ 0, 0 };
 	SDL_GetMouseState(&mouse.x, &mouse.y);
-	app.world.update(mouse);
+	app.world.update(0.01, mouse);
 
 	app.renderer->render(app.world);
 

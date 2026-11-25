@@ -12,13 +12,11 @@ struct VectorData {
 template <typename T>
 struct VectorData<2, T> {
 	T x{}, y{};
-	VectorData(T x, T y) : x(x), y(y) {}
 };
 
 template <typename T>
 struct VectorData<3, T> {
 	T x{}, y{}, z{};
-	VectorData(T x, T y, T z) : x(x), y(y), z(z) {}
 };
 
 template <std::size_t N, typename T>
@@ -46,35 +44,37 @@ struct Vector : VectorData<N, T> {
 	constexpr const std::size_t size() const noexcept { return N; }
 
 	constexpr Vector operator+(const Vector& other) const noexcept {
-		static_assert(N == other.data.size());
-		Vector<T, N> result{};
+		Vector result{};
 		for (std::size_t i = 0; i < N; ++i) {
-			result[i] = (*this)[i] + (*other)[i];
+			result[i] = (*this)[i] + other[i];
 		}
 		return result;
 	}
 	constexpr Vector operator-(const Vector& other) const noexcept {
-		static_assert(N == other.size());
-		Vector<N, T> result(*this);
+		Vector result{};
 		for (std::size_t i = 0; i < N; ++i) {
 			result[i] = (*this)[i] - other[i];
 		}
 		return result;
 	}
-	template <typename t>
-		requires(std::is_arithmetic_v<t>)
-	constexpr Vector operator/(const t& scalar) const {
-		Vector result{};
+	template <typename S>
+		requires(std::is_arithmetic_v<T>)
+	constexpr Vector operator/(const S& scalar) const {
+		Vector result{ 0, 0 };
 		for (std::size_t i = 0; i < N; ++i) {
 			result[i] = (*this)[i] / scalar;
 		}
 		return result;
 	}
-
-	Vector() = default;
-	template <typename... Args>
-		requires(sizeof...(Args) == N && (std::is_convertible_v<Args, T> && ...))
-	constexpr Vector(Args... args) : VectorData<N, T>{ static_cast<T>(args)... } {}
+	template <typename S>
+		requires(std::is_arithmetic_v<T>)
+	constexpr Vector operator*(const S& scalar) const {
+		Vector result{};
+		for (std::size_t i = 0; i < N; ++i) {
+			result[i] = (*this)[i] * scalar;
+		}
+		return result;
+	}
 };
 
 using Vector2i = Vector<2, int>;
