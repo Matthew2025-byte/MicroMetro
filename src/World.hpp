@@ -1,4 +1,7 @@
 #pragma once
+#include <array>
+#include <cassert>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -31,17 +34,21 @@ class Station {
 	TextureShape type;
 };
 struct RailSegment {
-	Station* start;
-	Station* end;
+	std::array<Station*, 2> stations;
 	Vector2f midpoint;
+	std::array<bool, 2> end{ false, false };
 
 	std::tuple<float, float> dist() const {
-		float first = (start->getPos() - midpoint).magnitude();
-		float second = (midpoint - end->getPos()).magnitude();
+		float first = (stations[0]->getPos() - midpoint).magnitude();
+		float second = (midpoint - stations[1]->getPos()).magnitude();
 		return { first, second };
 	}
+	bool contains(Station* station) const {
+		if (stations[0] == station || stations[1] == station) return true;
+		return false;
+	}
 
-	RailSegment(Station* start, Station* end, Vector2f mid) : start(start), end(end), midpoint(mid) {}
+	RailSegment(Station* start, Station* end, Vector2f mid) : stations(start, end), midpoint(mid) {}
 };
 struct Train {
 	Train(TextureShape type) : type(type) {
@@ -54,11 +61,11 @@ struct Train {
 		double localDist = dist;
 
 		if (dist < d1) {
-			start = seg.start->getPos();
+			start = seg.stations[0]->getPos();
 			end = seg.midpoint;
 		} else {
 			start = seg.midpoint;
-			end = seg.end->getPos();
+			end = seg.stations[1]->getPos();
 			localDist -= d1;
 		}
 		auto diff = end - start;
@@ -72,44 +79,100 @@ struct Train {
 	float dist = 0;
 	float speed = 1;
 	TextureShape type;
-	std::size_t current;
+	RailSegment* segment = nullptr;
 };
 struct RailLine {
-	std::vector<RailSegment> line;
+	std::vector<std::unique_ptr<RailSegment>> line;
 	std::vector<Train> trains;
 	SDL_Color color{ 255, 255, 255, 255 };
+	bool loop = false;
 
 	RailLine(SDL_Color color) : color(color) {}
 
-	// For this to work I am going to need RailSegment be a unique_ptr and store the current segment in Train instead of
-	// an index so position is persistent when the line is modified
 	void update(float dt) {
 		for (auto& train : trains) {
 			train.dist += train.speed * dt;
-			auto [d1, d2] = (*this)[train.current].dist();
+			std::size_t index = getIndex(train.segment);
+			auto [d1, d2] = (*this)[index].dist();
 			float dist = d1 + d2;
 			if (train.dist > dist) {
-				if ((*this)[train.current].end != (*this)[train.current + 1].start) {
+				if ((*this)[index].stations[1] != (*this)[index + 1].stations[0]) {
 					train.speed *= -1;
 					continue;
 				}
 				train.dist -= dist;
-				++train.current;
-
+				train.segment = &(*this)[index + 1];
+				continue;
 			} else if (train.dist < 0) {
-				if ((*this)[train.current].end != (*this)[train.current - 1].start) {
+				if ((*this)[index].stations[1] != (*this)[index - 1].stations[0]) {
 					train.speed *= -1;
 					continue;
 				}
-				--train.current;
+				train.segment = &(*this)[index - 1];
 			}
 		}
 	}
 
-	const RailSegment& operator[](std::size_t i) const { return this->line[i % line.size()]; }
+	bool isEnd(Station* station) const {
+		for (const auto& seg : line) {
+			if (seg->stations[0] == station && seg->end[0]) return true;
+			if (seg->stations[1] == station && seg->end[1]) return true;
+		}
+		return false;
+	}
+	void addSegment(RailSegment segment) {
+		for (std::size_t i = 0; i < line.size(); ++i) {
+			if (line[i]->stations[0] == segment.stations[1]) {
+				insert(segment, i);
+				updateEnd();
+				return;
+			}
+		}
+		append(segment);
+		updateEnd();
+	}
+	std::size_t getIndex(const RailSegment* segment) const {
+		for (std::size_t i = 0; i < line.size(); ++i) {
+			if (line[i].get() == segment) return i;
+		}
+		assert(false && "Segment not present");
+		return 0;
+	}
+
+	RailSegment& operator[](std::size_t i) const { return *this->line[i % line.size()]; }
 
 	auto begin() const { return line.begin(); }
 	auto end() const { return line.end(); }
+
+   private:
+	void insert(RailSegment segment, std::size_t index) {
+		assert(index < line.size() && "Index out of bounds");
+
+		if (index > 0) line[index - 1]->stations[1] = segment.stations[0];
+		line[index]->stations[0] = segment.stations[1];
+		line.insert(line.begin() + index, std::make_unique<RailSegment>(segment));
+	}
+	void append(RailSegment segment) {
+		assert(!loop && "Cannot append a segment to a loop");
+		if (line.size() == 0) {
+			line.push_back(std::make_unique<RailSegment>(segment));
+			return;
+		}
+		line.back()->stations[1] = segment.stations[0];
+
+		line.push_back(std::make_unique<RailSegment>(segment));
+	}
+	void updateEnd() {
+		for (auto& seg : line) {
+			seg->end = { false, false };
+		}
+		if (line.front()->stations[0] == line.back()->stations[1]) {
+			loop = true;
+			return;
+		}
+		line.front()->end = { true, false };
+		line.back()->end = { false, true };
+	}
 };
 
 struct DragState {
@@ -155,7 +218,7 @@ struct World {
 			// Add RailSegment
 			if (hoverStation && hoverStation != activeDrag->startStation) {
 				Vector2f midpoint = getIntercept(activeDrag->startStation->getPos(), hoverStation->getPos());
-				lines[selectedRail].line.push_back({ activeDrag->startStation, hoverStation, midpoint });
+				lines[selectedRail].addSegment({ activeDrag->startStation, hoverStation, midpoint });
 				activeDrag->startStation = hoverStation;
 
 				// Spawn train
@@ -193,7 +256,8 @@ struct World {
 
 	void onLeftMouseDown() {
 		if (hoverStation) {
-			activeDrag = DragState{ hoverStation, hoverStation->getPos(), hoverStation->getPos() };
+			if (lines[selectedRail].isEnd(hoverStation) || lines[selectedRail].line.empty())
+				activeDrag = DragState{ hoverStation, hoverStation->getPos(), hoverStation->getPos() };
 		}
 	}
 	void onLeftMouseUp() { activeDrag.reset(); }

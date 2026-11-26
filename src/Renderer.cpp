@@ -104,10 +104,11 @@ void Renderer::render(World& world) {
 
 	for (const auto& line : world.lines) {
 		for (const auto& seg : line.line) {
-			drawTrace({ seg.start->getPos(), seg.midpoint, seg.end->getPos() }, line.color);
+			drawTrace({ seg->stations[0]->getPos(), seg->midpoint, seg->stations[1]->getPos() }, line.color);
 		}
 		for (const auto& train : line.trains) {
-			auto [pos, angle] = train.getPos(line[train.current]);
+			std::size_t index = line.getIndex(train.segment);
+			auto [pos, angle] = train.getPos(line[index]);
 			drawShape(TextureShape::Carriage, pos, 50, line.color, angle);
 		}
 	}
