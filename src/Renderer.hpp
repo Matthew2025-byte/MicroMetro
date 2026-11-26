@@ -16,13 +16,16 @@ class Renderer {
 
    private:
 	SDL_Renderer* renderer;
+	static constexpr int Supersample = 4;
+	SDL_Texture* target = nullptr;
+	int targetW = 0, targetH = 0;
 
 	SDL_Texture* circle;
 	SDL_Texture* rect;
 	SDL_Texture* triangle;
 	SDL_Texture* trainCarriage;
 
-	void drawLine(SDL_Texture* texture, Vector2f a, Vector2f b, float width);
-	void drawTrace(std::array<Vector2f, 3> points, SDL_Color color);
+	void drawPath(std::vector<Vector2f> points, float width, SDL_Color color);
 	void drawOverlay(World& world);
+	void ensureTarget();
 };

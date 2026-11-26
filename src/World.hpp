@@ -19,6 +19,34 @@ Vector2f getIntercept(Vector2f a, Vector2f b) {
 
 	return intercept;
 }
+
+inline std::vector<Vector2f> makePath(Vector2f start, Vector2f mid, Vector2f end, float radius = 25.f) {
+	constexpr float epsilon = 1e-3f;
+	Vector2f v1 = mid - start, v2 = end - mid;
+	float d1 = v1.magnitude(), d2 = v2.magnitude();
+	if (d1 < epsilon || d2 < epsilon) return { start, mid, end };
+
+	float phi = std::atan2(std::abs(v1.x * v2.y - v1.y * v2.x), v1.x * v2.x + v1.y * v2.y);
+	if (phi < epsilon) return { start, mid, end };
+
+	float tanLen = std::min(radius * std::tan(phi / 2), std::min(d1, d2));
+	Vector2f dIn = v1 / d1, dOut = v2 / d2;
+	float r = tanLen / std::tan(phi / 2);
+	float sign = (dIn.x * dOut.y - dIn.y * dOut.x) > 0 ? 1.f : -1.f;
+	Vector2f p1 = mid - dIn * tanLen;
+	Vector2f center = p1 + Vector2f{ -dIn.y * sign, dIn.x * sign } * r;
+	Vector2f v = p1 - center;
+
+	std::vector<Vector2f> points{ start };
+	int steps = std::max(4, int(r * phi / 4));
+	for (int i = 0; i <= steps; ++i) {
+		float angle = sign * phi * i / steps;
+		float cs = std::cos(angle), sn = std::sin(angle);
+		points.push_back(center + Vector2f{ v.x * cs - v.y * sn, v.x * sn + v.y * cs });
+	}
+	points.push_back(end);
+	return points;
+}
 }  // namespace
 enum class TextureShape { Square, Circle, Triangle, Carriage, Bullet };
 class Station {
@@ -43,35 +71,72 @@ struct RailSegment {
 		float second = (midpoint - stations[1]->getPos()).magnitude();
 		return { first, second };
 	}
+	std::tuple<float, float> arc(float radius = 25) const {
+		auto [d1, d2] = dist();
+		constexpr float epsilon = 1e-3;
+		if (d1 < epsilon || d2 < epsilon) return { 0.f, 0.f };
+
+		Vector2f v1 = midpoint - stations[0]->getPos();
+		Vector2f v2 = stations[1]->getPos() - midpoint;
+		float phi = std::atan2(std::abs(v1.x * v2.y - v1.y * v2.x), v1.x * v2.x + v1.y * v2.y);
+		if (phi < epsilon) return { 0.f, 0.f };
+		float t = std::min(radius * std::tan(phi / 2), std::min(d1, d2));
+		return { phi, t };
+	}
+	float length() const {
+		auto [d1, d2] = dist();
+		auto [phi, t] = arc();
+		if (t == 0) return d1 + d2;
+		float r = t / std::tan(phi / 2);
+		return d1 + d2 - 2 * t + r * phi;
+	}
+	std::vector<Vector2f> path() const { return makePath(stations[0]->getPos(), midpoint, stations[1]->getPos()); }
+
 	bool contains(Station* station) const {
 		if (stations[0] == station || stations[1] == station) return true;
 		return false;
 	}
 
-	RailSegment(Station* start, Station* end, Vector2f mid) : stations(start, end), midpoint(mid) {}
+	RailSegment(Station* start, Station* end, Vector2f mid) : stations{ start, end }, midpoint(mid) {}
 };
 struct Train {
-	Train(TextureShape type) : type(type) {
+	Train(TextureShape type, RailSegment* pos) : type(type), segment(pos) {
 		if (type == TextureShape::Carriage) speed = CarriageSpeed;
 		else speed = BulletSpeed;
 	}
 	std::tuple<Vector2f, double> getPos(const RailSegment& seg) const {
+		constexpr double toDegrees = 180 / SDL_PI_D;
+		constexpr float epsilon = 1e-3;
 		auto [d1, d2] = seg.dist();
-		Vector2f start, end;
-		double localDist = dist;
+		auto [phi, tanLen] = seg.arc();
+		Vector2f start = seg.stations[0]->getPos(), end = seg.stations[1]->getPos(), mid = seg.midpoint;
 
-		if (dist < d1) {
-			start = seg.stations[0]->getPos();
-			end = seg.midpoint;
-		} else {
-			start = seg.midpoint;
-			end = seg.stations[1]->getPos();
-			localDist -= d1;
+		Vector2f dIn = d1 > epsilon ? (mid - start) / d1 : Vector2f{ 1, 0 };
+		Vector2f dOut = d2 > epsilon ? (end - mid) / d2 : dIn;
+		if (d1 <= epsilon) dIn = dOut;
+
+		float leg1 = d1 - tanLen;
+		if (dist < leg1 || tanLen == 0) {
+			if (tanLen == 0 && dist >= d1) return { mid + dOut * (dist - d1), std::atan2(dOut.y, dOut.x) * toDegrees };
+			return { start + dIn * dist, std::atan2(dIn.y, dIn.x) * toDegrees };
 		}
-		auto diff = end - start;
-		Vector2f dir = diff.normalized();
-		double angle = std::atan2(diff.y, diff.x) * (180 / SDL_PI_D);
-		return { start + dir * localDist, angle };
+
+		float radius = tanLen / std::tan(phi / 2);
+		float arcLen = radius * phi;
+		if (dist < leg1 + arcLen) {
+			float sign = (dIn.x * dOut.y - dIn.y * dOut.x) > 0 ? 1 : -1;
+			Vector2f p1 = mid - dIn * tanLen;
+			Vector2f center = p1 + Vector2f{ -dIn.y * sign, dIn.x * sign } * radius;
+			float ang = sign * (dist - leg1) / radius;
+			float cs = std::cos(ang), sn = std::sin(ang);
+
+			auto rot = [&](Vector2f v) { return Vector2f{ v.x * cs - v.y * sn, v.x * sn + v.y * cs }; };
+			Vector2f dir = rot(dIn);
+			return { center + rot(p1 - center), std::atan2(dir.y, dir.x) * toDegrees };
+		}
+
+		Vector2f p2 = mid + dOut * tanLen;
+		return { p2 + dOut * (dist - leg1 - arcLen), std::atan2(dOut.y, dOut.x) * toDegrees };
 	}
 
 	static constexpr float BulletSpeed = 100;
@@ -93,22 +158,25 @@ struct RailLine {
 		for (auto& train : trains) {
 			train.dist += train.speed * dt;
 			std::size_t index = getIndex(train.segment);
-			auto [d1, d2] = (*this)[index].dist();
-			float dist = d1 + d2;
-			if (train.dist > dist) {
+			const std::size_t n = line.size();
+
+			float length = (*this)[index].length();
+			if (train.dist > length) {
 				if ((*this)[index].stations[1] != (*this)[index + 1].stations[0]) {
 					train.speed *= -1;
 					continue;
 				}
-				train.dist -= dist;
+				train.dist -= length;
 				train.segment = &(*this)[index + 1];
 				continue;
 			} else if (train.dist < 0) {
-				if ((*this)[index].stations[1] != (*this)[index - 1].stations[0]) {
+				std::size_t prevIndex = (index + n - 1) % n;
+				if ((*this)[prevIndex].stations[1] != (*this)[index - 1].stations[0]) {
 					train.speed *= -1;
 					continue;
 				}
-				train.segment = &(*this)[index - 1];
+				train.segment = &(*this)[prevIndex - 1];
+				train.dist += (*this)[prevIndex].length();
 			}
 		}
 	}
@@ -223,7 +291,8 @@ struct World {
 
 				// Spawn train
 				if (lines[selectedRail].line.size() == 1) {
-					lines[selectedRail].trains.emplace_back(TextureShape::Carriage);
+					lines[selectedRail].trains.emplace_back(TextureShape::Carriage,
+															lines[selectedRail].line.front().get());
 				}
 			}
 		}

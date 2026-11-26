@@ -68,24 +68,27 @@ void Renderer::drawShape(TextureShape type, Vector2f center, float width, SDL_Co
 	SDL_SetTextureAlphaMod(tex, color.a);
 	SDL_RenderTextureRotated(this->renderer, tex, NULL, &rect, rotation, &point, SDL_FlipMode::SDL_FLIP_NONE);
 }
-void Renderer::drawLine(SDL_Texture* texture, Vector2f a, Vector2f b, float width) {
-	auto diff = b - a;
-	float dist = diff.magnitude();
+void Renderer::drawPath(std::vector<Vector2f> points, float width, SDL_Color color) {
+	if (points.size() < 2) return;
+	SDL_FColor col{ color.r / 255.f, color.g / 255.f, color.b / 255.f, color.a / 255.f };
+	std::vector<SDL_Vertex> verts;
+	std::vector<int> idx;
+	float h = width / 2;
 
-	double angle = std::atan2(diff.y, diff.x) * (180 / SDL_PI_D);
-
-	SDL_FRect line = { a.x, a.y - width / 2, dist, width };
-	SDL_FPoint rotationPoint = { 0, width / 2 };
-
-	SDL_RenderTextureRotated(this->renderer, texture, NULL, &line, angle, &rotationPoint, SDL_FlipMode::SDL_FLIP_NONE);
-}
-void Renderer::drawTrace(std::array<Vector2f, 3> points, SDL_Color color) {
-	drawShape(TextureShape::Circle, points[1], 20, color);
-
-	SDL_SetTextureColorMod(rect, color.r, color.g, color.b);
-	SDL_SetTextureAlphaMod(rect, color.a);
-	drawLine(rect, points[0], points[1], 20);
-	drawLine(rect, points[1], points[2], 20);
+	for (std::size_t i = 0; i < points.size(); ++i) {
+		Vector2f prev = points[i == 0 ? 0 : i - 1];
+		Vector2f next = points[i + 1 < points.size() ? i + 1 : i];
+		Vector2f dir = (next - prev).normalized();
+		Vector2f n = { -dir.y, dir.x };
+		Vector2f l = points[i] + n * h, r = points[i] - n * h;
+		verts.push_back({ { l.x, l.y }, col, { 0, 0 } });
+		verts.push_back({ { r.x, r.y }, col, { 0, 0 } });
+		if (i > 0) {
+			int k = int(i) * 2;
+			idx.insert(idx.end(), { k - 2, k - 1, k, k - 1, k + 1, k });
+		}
+	}
+	SDL_RenderGeometry(this->renderer, nullptr, verts.data(), int(verts.size()), idx.data(), int(idx.size()));
 }
 
 void Renderer::drawOverlay(World& world) {
@@ -100,22 +103,28 @@ void Renderer::drawOverlay(World& world) {
 	}
 }
 void Renderer::render(World& world) {
+	ensureTarget();
+	SDL_SetRenderTarget(renderer, target);
+	SDL_SetRenderScale(renderer, Supersample, Supersample);
+
+	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 	SDL_RenderClear(renderer);
 
 	for (const auto& line : world.lines) {
 		for (const auto& seg : line.line) {
-			drawTrace({ seg->stations[0]->getPos(), seg->midpoint, seg->stations[1]->getPos() }, line.color);
+			drawPath(seg->path(), 20, line.color);
 		}
 		for (const auto& train : line.trains) {
-			std::size_t index = line.getIndex(train.segment);
-			auto [pos, angle] = train.getPos(line[index]);
+			if (!train.segment) continue;
+			auto [pos, angle] = train.getPos(*train.segment);
 			drawShape(TextureShape::Carriage, pos, 50, line.color, angle);
 		}
 	}
 
 	if (world.activeDrag) {
 		const auto& drag = *world.activeDrag;
-		drawTrace({ drag.startStation->getPos(), drag.intercept, drag.current }, world.railColors[world.selectedRail]);
+		drawPath(makePath(drag.startStation->getPos(), drag.intercept, drag.current), 20,
+				 world.railColors[world.selectedRail]);
 	}
 
 	for (const auto& station : world.stations) {
@@ -125,7 +134,24 @@ void Renderer::render(World& world) {
 		drawShape(station->getType(), station->getPos(), size, SDL_Color{ 255, 255, 255, 255 });
 	}
 
-	drawOverlay(world);
+	SDL_SetRenderScale(renderer, 1, 1);
+	SDL_SetRenderTarget(renderer, NULL);
+	SDL_RenderClear(renderer);
+	SDL_RenderTexture(renderer, target, NULL, NULL);
 
+	drawOverlay(world);
 	SDL_RenderPresent(renderer);
+}
+
+void Renderer::ensureTarget() {
+	int w, h;
+	SDL_GetCurrentRenderOutputSize(renderer, &w, &h);
+	if (target && w == targetW && h == targetH) return;
+
+	if (target) SDL_DestroyTexture(target);
+	target =
+		SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, w * Supersample, h * Supersample);
+	SDL_SetTextureScaleMode(target, SDL_SCALEMODE_LINEAR);
+	targetW = w;
+	targetH = h;
 }
